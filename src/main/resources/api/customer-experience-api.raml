@@ -1,0 +1,92 @@
+#%RAML 1.0
+title: Customer Experience API
+version: v1
+baseUri: https://customer-exp-api.cloudhub.io/{version}
+mediaType: application/json
+
+types:
+  Customer:
+    type: object
+    properties:
+      id: string
+      firstName: string
+      lastName: string
+      email: string
+      phone?: string
+      status:
+        type: string
+        enum: [active, inactive, suspended]
+      createdDate: datetime
+
+  CustomerCreateRequest:
+    type: object
+    properties:
+      firstName: string
+      lastName: string
+      email: string
+      phone?: string
+
+  ErrorResponse:
+    type: object
+    properties:
+      error:
+        type: object
+        properties:
+          code: string
+          message: string
+          timestamp: datetime
+          correlationId: string
+
+/customers:
+  get:
+    displayName: Search Customers
+    queryParameters:
+      status:
+        type: string
+        enum: [active, inactive, suspended]
+        required: false
+    responses:
+      200:
+        body:
+          application/json:
+            type: Customer[]
+      401:
+        body:
+          application/json:
+            type: ErrorResponse
+
+  post:
+    displayName: Create Customer
+    body:
+      application/json:
+        type: CustomerCreateRequest
+    responses:
+      201:
+        body:
+          application/json:
+            type: Customer
+      400:
+        body:
+          application/json:
+            type: ErrorResponse
+      401:
+        body:
+          application/json:
+            type: ErrorResponse
+
+  /{customerId}:
+    get:
+      displayName: Get Customer by ID
+      responses:
+        200:
+          body:
+            application/json:
+              type: Customer
+        404:
+          body:
+            application/json:
+              type: ErrorResponse
+        401:
+          body:
+            application/json:
+              type: ErrorResponse

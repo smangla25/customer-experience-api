@@ -1,0 +1,12 @@
+http:
+  port: "8081"
+
+system-api:
+  host: "customer-sys-api.cloudhub.io"
+  port: "443"
+  basePath: "/api"
+  timeout: "5000"
+
+api:
+  autodiscovery:
+    id: "customer-exp-api-dev"

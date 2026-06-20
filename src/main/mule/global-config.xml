@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:secure-properties="http://www.mulesoft.org/schema/mule/secure-properties"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/secure-properties http://www.mulesoft.org/schema/mule/secure-properties/current/mule-secure-properties.xsd">
+
+    <configuration-properties file="properties/${mule.env}.yaml"/>
+
+    <secure-properties:config name="secureConfig"
+        file="properties/${mule.env}-secure.yaml"
+        key="${secure.key}">
+        <secure-properties:encrypt algorithm="Blowfish"/>
+    </secure-properties:config>
+
+    <!--
+    <api-gateway:autodiscovery apiId="${api.autodiscovery.id}"
+        flowRef="customer-experience-api-main"
+        doc:name="API Autodiscovery"/>
+    -->
+
+</mule>

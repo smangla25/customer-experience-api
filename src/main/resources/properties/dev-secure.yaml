@@ -1,0 +1,7 @@
+# Encrypted properties for DEV environment
+# Values here should be encrypted using the MuleSoft Secure Properties Tool
+# with the same key passed at runtime via -Dsecure.key=<your-key>
+#
+# Example:
+# system-api.client-id: "![encrypted-value-here]"
+# system-api.client-secret: "![encrypted-value-here]"
