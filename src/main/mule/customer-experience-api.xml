@@ -1,0 +1,249 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:http="http://www.mulesoft.org/schema/mule/http"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xmlns:apikit="http://www.mulesoft.org/schema/mule/mule-apikit"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
+        http://www.mulesoft.org/schema/mule/mule-apikit http://www.mulesoft.org/schema/mule/mule-apikit/current/mule-apikit.xsd">
+
+    <http:listener-config name="httpListenerConfig">
+        <http:listener-connection host="0.0.0.0" port="${http.port}"/>
+    </http:listener-config>
+
+    <http:request-config name="systemApiConfig" responseTimeout="${system-api.timeout}">
+        <http:request-connection host="${system-api.host}" port="${system-api.port}" protocol="HTTPS"/>
+    </http:request-config>
+
+    <apikit:config name="customer-experience-api-config"
+                   raml="api/customer-experience-api.raml"
+                   outboundHeadersMapName="outboundHeaders"
+                   httpStatusVarName="httpStatus"/>
+
+    <flow name="customer-experience-api-main">
+        <http:listener config-ref="httpListenerConfig" path="/api/*"/>
+        <apikit:router config-ref="customer-experience-api-config"/>
+        <error-handler ref="globalErrorHandler"/>
+    </flow>
+
+    <!-- GET /customers/{customerId} -->
+    <flow name="get:\customers\(customerId):customer-experience-api-config">
+        <logger level="INFO" message="Getting customer: #[attributes.uriParams.customerId] correlationId: #[correlationId]"/>
+
+        <!-- FIX H-001: URI param passed via uri-params map, not embedded in path string -->
+        <http:request config-ref="systemApiConfig" method="GET" path="/api/customers/{customerId}">
+            <http:uri-params><![CDATA[#[output application/java --- { "customerId": attributes.uriParams.customerId }]]]></http:uri-params>
+        </http:request>
+
+        <ee:transform>
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    id: "CUST-" ++ (payload.sfdc_id default "UNKNOWN"),
+    firstName: payload.first_name default "",
+    lastName:  payload.last_name  default "",
+    email:     lower(payload.email_address default ""),
+    phone:     if (payload.phone_number == null or payload.phone_number == "")
+                   null
+               else if ((payload.phone_number default "") startsWith "+")
+                   payload.phone_number
+               else "+" ++ payload.phone_number,
+    status: payload.account_status match {
+        case "A" -> "active"
+        case "I" -> "inactive"
+        case "S" -> "suspended"
+        else     -> "unknown"
+    },
+    createdDate: (payload.created_date as String) default null
+}]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+
+        <logger level="INFO" message="Customer retrieved - id: #[payload.id] correlationId: #[correlationId]"/>
+    </flow>
+
+    <!-- POST /customers -->
+    <flow name="post:\customers:application\json:customer-experience-api-config">
+        <logger level="INFO" message="Creating customer - correlationId: #[correlationId]"/>
+
+        <!-- FIX H-002: raise-error triggers globalErrorHandler properly — httpStatus=400 guaranteed -->
+        <choice>
+            <when expression="#[payload.firstName == null or payload.firstName == ''
+                               or payload.lastName == null  or payload.lastName == ''
+                               or payload.email == null     or payload.email == ''
+                               or !(payload.email matches /^[^@]+@[^@]+\.[^@]+$/)]">
+                <raise-error type="APP:VALIDATION"
+                             description="Required fields missing or invalid. firstName, lastName, and a valid email are required."/>
+            </when>
+            <otherwise>
+                <ee:transform>
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    first_name:    payload.firstName,
+    last_name:     payload.lastName,
+    email_address: lower(payload.email),
+    phone_number:  if ((payload.phone default "") startsWith "+")
+                       payload.phone
+                   else if (payload.phone != null and payload.phone != "")
+                       "+" ++ payload.phone
+                   else null
+}]]></ee:set-payload>
+                    </ee:message>
+                </ee:transform>
+
+                <http:request config-ref="systemApiConfig" method="POST" path="/api/customers"/>
+
+                <ee:transform>
+                    <ee:message>
+                        <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    id:          "CUST-" ++ (payload.sfdc_id default "UNKNOWN"),
+    firstName:   payload.first_name default "",
+    lastName:    payload.last_name  default "",
+    email:       lower(payload.email_address default ""),
+    phone:       if ((payload.phone_number default "") startsWith "+")
+                     (payload.phone_number default "")
+                 else if (payload.phone_number != null and payload.phone_number != "")
+                     "+" ++ payload.phone_number
+                 else null,
+    status:      "active",
+    createdDate: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss'Z'"}
+}]]></ee:set-payload>
+                    </ee:message>
+                </ee:transform>
+
+                <set-variable variableName="httpStatus" value="201"/>
+            </otherwise>
+        </choice>
+    </flow>
+
+    <!-- GET /customers?status={status} -->
+    <flow name="get:\customers:customer-experience-api-config">
+        <logger level="INFO" message="Searching customers - status: #[attributes.queryParams.status] correlationId: #[correlationId]"/>
+
+        <http:request config-ref="systemApiConfig" method="GET" path="/api/customers">
+            <http:query-params><![CDATA[#[output application/java --- {status: attributes.queryParams.status}]]]></http:query-params>
+        </http:request>
+
+        <ee:transform>
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+payload map {
+    id:          "CUST-" ++ ($.sfdc_id default "UNKNOWN"),
+    firstName:   $.first_name default "",
+    lastName:    $.last_name  default "",
+    email:       lower($.email_address default ""),
+    phone:       if (($.phone_number default "") startsWith "+")
+                     ($.phone_number default "")
+                 else if ($.phone_number != null and $.phone_number != "")
+                     "+" ++ $.phone_number
+                 else null,
+    status: $.account_status match {
+        case "A" -> "active"
+        case "I" -> "inactive"
+        case "S" -> "suspended"
+        else     -> "unknown"
+    },
+    createdDate: ($.created_date as String) default null
+}]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+    </flow>
+
+    <!-- FIX M-002: ALL handlers on-error-propagate → on-error-continue -->
+    <error-handler name="globalErrorHandler">
+
+        <on-error-continue type="HTTP:NOT_FOUND">
+            <ee:transform>
+                <ee:message>
+                    <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{ error: { code: "CUSTOMER_NOT_FOUND", message: "Customer with the requested ID was not found",
+           timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss'Z'"}, correlationId: correlationId } }]]></ee:set-payload>
+                </ee:message>
+            </ee:transform>
+            <set-variable variableName="httpStatus" value="404"/>
+        </on-error-continue>
+
+        <on-error-continue type="APP:VALIDATION">
+            <ee:transform>
+                <ee:message>
+                    <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{ error: { code: "VALIDATION_ERROR", message: error.description,
+           timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss'Z'"}, correlationId: correlationId } }]]></ee:set-payload>
+                </ee:message>
+            </ee:transform>
+            <set-variable variableName="httpStatus" value="400"/>
+        </on-error-continue>
+
+        <on-error-continue type="HTTP:CONNECTIVITY, HTTP:TIMEOUT">
+            <ee:transform>
+                <ee:message>
+                    <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{ error: { code: "SERVICE_UNAVAILABLE", message: "The upstream service is temporarily unavailable. Please retry after 30 seconds.",
+           timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss'Z'"}, correlationId: correlationId } }]]></ee:set-payload>
+                </ee:message>
+            </ee:transform>
+            <set-variable variableName="httpStatus" value="503"/>
+            <set-variable variableName="outboundHeaders" value="#[{'retry-after': '30'}]"/>
+        </on-error-continue>
+
+        <on-error-continue type="APIKIT:BAD_REQUEST">
+            <ee:transform>
+                <ee:message>
+                    <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{ error: { code: "VALIDATION_ERROR", message: error.description,
+           timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss'Z'"}, correlationId: correlationId } }]]></ee:set-payload>
+                </ee:message>
+            </ee:transform>
+            <set-variable variableName="httpStatus" value="400"/>
+        </on-error-continue>
+
+        <on-error-continue type="HTTP:UNAUTHORIZED">
+            <ee:transform>
+                <ee:message>
+                    <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{ error: { code: "UNAUTHORIZED", message: "Authentication is required to access this resource",
+           timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss'Z'"}, correlationId: correlationId } }]]></ee:set-payload>
+                </ee:message>
+            </ee:transform>
+            <set-variable variableName="httpStatus" value="401"/>
+        </on-error-continue>
+
+        <on-error-continue type="ANY">
+            <ee:transform>
+                <ee:message>
+                    <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{ error: { code: "INTERNAL_ERROR", message: "An unexpected error occurred. Please contact support with the correlationId.",
+           timestamp: now() as String {format: "yyyy-MM-dd'T'HH:mm:ss'Z'"}, correlationId: correlationId } }]]></ee:set-payload>
+                </ee:message>
+            </ee:transform>
+            <set-variable variableName="httpStatus" value="500"/>
+        </on-error-continue>
+
+    </error-handler>
+
+</mule>
